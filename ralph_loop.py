@@ -410,9 +410,12 @@ def record_result(output: str, done: bool = False) -> None:
         metadata["completed_at"] = datetime.now().isoformat()
         (last_run / "metadata.json").write_text(json.dumps(metadata, indent=2))
         
-        # Update state with summary
+        # Update state with summary (always, not just on completion)
+        summary = output[:200].replace("\n", " ")  # First 200 chars
         if done:
-            update_state("✅ Goal marked as complete!")
+            update_state(f"✅ Step completed: {summary}")
+        else:
+            update_state(f"📝 Step recorded: {summary}")
 
 
 def cleanup_old_runs(max_runs: int = 50):
