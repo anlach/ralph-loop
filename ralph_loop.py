@@ -29,12 +29,16 @@ SETTINGS_FILE = MEMORY_DIR / ".ralph_settings.json"
 DEFAULT_SETTINGS = {
     "max_iterations": 10,
     "max_cost": None,
+    "max_tokens_per_run": None,  # Token budget per iteration
     "notify_channel": None,
     "model": "chutes/MiniMaxAI/MiniMax-M2.5-TEE",
     "max_retries": 3,
     "timeout": 600,
     "auto_mode": False,
     "auto_delay": 5,
+    "auto_frequency": "1m",  # How often to run in auto mode
+    "learn_from_usage": True,  # Self-improvement: track what works
+    "usage_stats": {},  # Track token usage over time
 }
 
 
@@ -203,6 +207,18 @@ def _redact_secrets(text: str) -> str:
 
 def run_step(settings: dict) -> dict:
     """Run one iteration of the loop - generates prompt for subagent."""
+    # Check iteration limit before running
+    current = get_iteration()
+    if current >= settings.get("max_iterations", 10):
+        clear_goal()
+        return {
+            "success": False,
+            "output": "Max iterations reached",
+            "prompt": "",
+            "done": True,
+            "iteration": current,
+        }
+    
     goal_step = increment_iteration()
     prompt = load_prompt(consume_inbox=True, goal_step=goal_step)
     run_dir = make_run_dir()
@@ -543,7 +559,54 @@ def handle_command(command: str, args: list, message=None) -> str:
 - `/ralph stop` - Halt
 - `/ralph config` - Show settings
 - `/ralph config-set <key> <value>` - Update setting
-- `/ralph help` - Show this help"""
+- `/ralph help` - Show this help
+- `/ralph usage` - Show token usage stats
+- `/ralph tune` - Auto-tune settings based on usage"""
+    
+    elif command == "usage":
+        """Show token usage stats."""
+        usage = settings.get("usage_stats", {})
+        if not usage:
+            return "📊 No usage stats yet. Run some iterations to collect data."
+        
+        total_runs = usage.get("total_runs", 0)
+        total_tokens = usage.get("total_tokens", 0)
+        avg_tokens = total_tokens / total_runs if total_runs > 0 else 0
+        
+        response = f"📊 **Usage Stats**\n\n"
+        response += f"- Total runs: {total_runs}\n"
+        response += f"- Total tokens: ~{total_tokens:,}\n"
+        response += f"- Avg per run: ~{avg_tokens:,.0f}\n"
+        
+        if settings.get("max_tokens_per_run"):
+            response += f"- Budget per run: {settings['max_tokens_per_run']}\n"
+        
+        return response
+    
+    elif command == "tune":
+        """Auto-tune settings based on usage patterns."""
+        usage = settings.get("usage_stats", {})
+        
+        if not usage or usage.get("total_runs", 0) < 3:
+            return "Need at least 3 runs before tuning. Keep going!"
+        
+        # Simple auto-tune logic
+        avg_tokens = usage.get("total_tokens", 0) / max(usage.get("total_runs", 1), 1)
+        
+        # Recommend settings based on patterns
+        response = "🎛️ **Auto-tune Recommendations**\n\n"
+        response += f"Based on {usage.get('total_runs')} runs (~{usage.get('total_tokens',0):,} tokens):\n\n"
+        
+        if avg_tokens > 100000:
+            response += "⚠️ High token usage detected.\n"
+            response += f"- Consider setting `max_tokens_per_run: {int(avg_tokens * 0.8)}`\n"
+            response += "- Use shorter prompts in PROMPT.md\n"
+        elif avg_tokens < 20000:
+            response += "✅ Low token usage - you're efficient!\n"
+        
+        response += f"\nCurrent avg: ~{avg_tokens:,.0f} tokens/run"
+        
+        return response
     
     else:
         return f"Unknown command: {command}\n\nTry `/ralph help`"
