@@ -24,6 +24,7 @@ GOAL_FILE = MEMORY_DIR / "GOAL.md"
 STATE_FILE = MEMORY_DIR / "STATE.md"
 INBOX_FILE = MEMORY_DIR / "INBOX.md"
 SETTINGS_FILE = MEMORY_DIR / ".ralph_settings.json"
+LOCK_FILE = MEMORY_DIR / ".running.lock"
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -176,6 +177,47 @@ def is_running() -> bool:
     return get_goal() != ""
 
 
+def acquire_lock() -> bool:
+    """Acquire run lock to prevent overlapping runs."""
+    if LOCK_FILE.exists():
+        # Check if stale (older than 10 minutes)
+        try:
+            import time
+            mtime = LOCK_FILE.stat().st_mtime
+            if time.time() - mtime > 600:  # 10 min stale
+                LOCK_FILE.unlink()
+                LOCK_FILE.write_text(str(os.getpid()))
+                return True
+        except:
+            pass
+        return False
+    LOCK_FILE.write_text(str(os.getpid()))
+    return True
+
+
+def release_lock() -> None:
+    """Release run lock."""
+    try:
+        LOCK_FILE.unlink()
+    except:
+        pass
+
+
+def is_locked() -> bool:
+    """Check if a run is in progress."""
+    if not LOCK_FILE.exists():
+        return False
+    try:
+        import time
+        mtime = LOCK_FILE.stat().st_mtime
+        if time.time() - mtime > 600:  # Stale
+            LOCK_FILE.unlink()
+            return False
+    except:
+        pass
+    return True
+
+
 def get_iteration() -> int:
     """Get current iteration number."""
     settings = load_settings()
@@ -207,6 +249,27 @@ def _redact_secrets(text: str) -> str:
 
 def run_step(settings: dict) -> dict:
     """Run one iteration of the loop - generates prompt for subagent."""
+    # Check for existing run (serial execution)
+    if is_locked():
+        return {
+            "success": False,
+            "output": "Another run is in progress. Wait for it to complete.",
+            "prompt": "",
+            "done": False,
+            "iteration": get_iteration(),
+            "locked": True,
+        }
+    
+    # Acquire lock
+    if not acquire_lock():
+        return {
+            "success": False,
+            "output": "Could not acquire lock",
+            "prompt": "",
+            "done": False,
+            "iteration": get_iteration(),
+        }
+    
     # Check iteration limit before running
     current = get_iteration()
     if current >= settings.get("max_iterations", 10):
@@ -248,6 +311,12 @@ def run_step(settings: dict) -> dict:
 
 
 def record_result(output: str, done: bool = False) -> None:
+    """Record the result of a subagent run."""
+    # Release lock after work is recorded
+    release_lock()
+    
+    if not RUNS_DIR.exists():
+        return
     """Record the result of a subagent run."""
     if not RUNS_DIR.exists():
         return
@@ -561,7 +630,65 @@ def handle_command(command: str, args: list, message=None) -> str:
 - `/ralph config-set <key> <value>` - Update setting
 - `/ralph help` - Show this help
 - `/ralph usage` - Show token usage stats
-- `/ralph tune` - Auto-tune settings based on usage"""
+- `/ralph tune` - Auto-tune settings based on usage
+- `/ralph auto on|off` - Enable/disable auto-run mode"""
+    
+    elif command == "auto":
+        """Enable or disable auto-run mode with cron."""
+        if not args:
+            auto_on = settings.get("auto_mode", False)
+            freq = settings.get("auto_frequency", "1m")
+            return f"Auto-run: **{'ON' if auto_on else 'OFF'}** (frequency: {freq})"
+        
+        action = args[0].lower()
+        
+        if action == "on":
+            # Check if goal is set
+            if not is_running():
+                return "Set a goal first with `/ralph start <goal>`"
+            
+            # Create cron job
+            freq = settings.get("auto_frequency", "1m")
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["openclaw", "cron", "add",
+                     "--name", "ralph-loop",
+                     "--every", freq,
+                     "--message", "/ralph run"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                
+                if result.returncode == 0:
+                    settings["auto_mode"] = True
+                    save_settings(settings)
+                    return f"✅ Auto-run enabled! Cron job added (runs every {freq}).\n\nUse `/ralph auto off` to disable."
+                else:
+                    return f"❌ Failed to create cron: {result.stderr}"
+            except FileNotFoundError:
+                return "❌ openclaw CLI not found"
+            except Exception as e:
+                return f"❌ Error: {e}"
+        
+        elif action == "off":
+            try:
+                import subprocess
+                subprocess.run(
+                    ["openclaw", "cron", "rm", "ralph-loop"],
+                    capture_output=True,
+                    timeout=30,
+                )
+            except:
+                pass
+            
+            settings["auto_mode"] = False
+            save_settings(settings)
+            return "⏹ Auto-run disabled. Cron job removed."
+        
+        else:
+            return "Usage: `/ralph auto on` or `/ralph auto off`"
     
     elif command == "usage":
         """Show token usage stats."""

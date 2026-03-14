@@ -62,12 +62,15 @@ Each iteration:
 /ralph next             # Advance to next iteration
 /ralph prompt           # Show current prompt
 /ralph status           # Check if running (detailed view)
-/ralph logs [n]         # View recent runs
+/ralph logs [n]         # View recent runs (default 5)
 /ralph state            # Show current state
 /ralph clear            # Clean up old runs
 /ralph stop             # Halt
 /ralph config           # Show settings
 /ralph config-set <key> <value>  # Update setting
+/ralph auto on|off      # Enable/disable auto-run mode (uses cron)
+/ralph usage            # Show token usage stats
+/ralph tune             # Auto-tune recommendations based on usage
 /ralph help             # Show this help
 ```
 
@@ -90,11 +93,15 @@ Edit `memory/.ralph_settings.json`:
 {
   "max_iterations": 10,
   "max_cost": null,
+  "max_tokens_per_run": null,
   "model": "chutes/MiniMaxAI/MiniMax-M2.5-TEE",
   "timeout": 600,
   "max_retries": 3,
   "auto_mode": false,
-  "auto_delay": 5
+  "auto_delay": 5,
+  "auto_frequency": "1m",
+  "learn_from_usage": true,
+  "usage_stats": {}
 }
 ```
 
@@ -102,10 +109,14 @@ Edit `memory/.ralph_settings.json`:
 |---------|---------|-------------|
 | `max_iterations` | 10 | Stop after N iterations |
 | `max_cost` | null | Stop after $N spent |
+| `max_tokens_per_run` | null | Token budget per run |
 | `model` | MiniMax-M2.5-TEE | Model to use |
 | `timeout` | 600 | Seconds per iteration |
 | `max_retries` | 3 | Retries on failure |
-| `auto_mode` | false | Run automatically on heartbeat |
+| `auto_mode` | false | Run automatically via cron |
+| `auto_frequency` | "1m" | Cron frequency (e.g., "1m", "10m", "1h") |
+| `learn_from_usage` | true | Enable usage tracking |
+| `usage_stats` | {} | Token usage history |
 
 ## Key Differences from Arbos
 

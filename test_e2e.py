@@ -61,8 +61,12 @@ def test_run_step():
     """Test running a step."""
     with tempfile.TemporaryDirectory() as tmpdir:
         original_memory = ralph_loop.MEMORY_DIR
+        original_runs = ralph_loop.RUNS_DIR
+        original_lock = ralph_loop.LOCK_FILE
+        
         ralph_loop.MEMORY_DIR = Path(tmpdir)
         ralph_loop.RUNS_DIR = Path(tmpdir) / "runs"
+        ralph_loop.LOCK_FILE = Path(tmpdir) / ".running.lock"
         
         try:
             ralph_loop.set_goal("Test goal")
@@ -75,15 +79,20 @@ def test_run_step():
             print("✅ test_run_step passed")
         finally:
             ralph_loop.MEMORY_DIR = original_memory
-            ralph_loop.RUNS_DIR = original_memory / "runs"
+            ralph_loop.RUNS_DIR = original_runs
+            ralph_loop.LOCK_FILE = original_lock
 
 
 def test_record_result():
     """Test recording result."""
     with tempfile.TemporaryDirectory() as tmpdir:
         original_memory = ralph_loop.MEMORY_DIR
+        original_runs = ralph_loop.RUNS_DIR
+        original_lock = ralph_loop.LOCK_FILE
+        
         ralph_loop.MEMORY_DIR = Path(tmpdir)
         ralph_loop.RUNS_DIR = Path(tmpdir) / "runs"
+        ralph_loop.LOCK_FILE = Path(tmpdir) / ".running.lock"
         
         try:
             ralph_loop.set_goal("Test goal")
@@ -100,7 +109,8 @@ def test_record_result():
             print("✅ test_record_result passed")
         finally:
             ralph_loop.MEMORY_DIR = original_memory
-            ralph_loop.RUNS_DIR = original_memory / "runs"
+            ralph_loop.RUNS_DIR = original_runs
+            ralph_loop.LOCK_FILE = original_lock
 
 
 def test_completion():
@@ -127,8 +137,12 @@ def test_iteration_tracking():
     """Test iteration counter."""
     with tempfile.TemporaryDirectory() as tmpdir:
         original_memory = ralph_loop.MEMORY_DIR
+        original_runs = ralph_loop.RUNS_DIR
+        original_lock = ralph_loop.LOCK_FILE
+        
         ralph_loop.MEMORY_DIR = Path(tmpdir)
         ralph_loop.RUNS_DIR = Path(tmpdir) / "runs"
+        ralph_loop.LOCK_FILE = Path(tmpdir) / ".running.lock"
         
         try:
             ralph_loop.set_goal("Test goal")
@@ -136,15 +150,18 @@ def test_iteration_tracking():
             assert ralph_loop.get_iteration() == 0
             
             ralph_loop.run_step(ralph_loop.load_settings())
+            ralph_loop.release_lock()
             assert ralph_loop.get_iteration() == 1
             
             ralph_loop.run_step(ralph_loop.load_settings())
+            ralph_loop.release_lock()
             assert ralph_loop.get_iteration() == 2
             
             print("✅ test_iteration_tracking passed")
         finally:
             ralph_loop.MEMORY_DIR = original_memory
-            ralph_loop.RUNS_DIR = original_memory / "runs"
+            ralph_loop.RUNS_DIR = original_runs
+            ralph_loop.LOCK_FILE = original_lock
 
 
 def test_state_persistence():
@@ -172,13 +189,19 @@ def test_logs():
     """Test log viewing."""
     with tempfile.TemporaryDirectory() as tmpdir:
         original_memory = ralph_loop.MEMORY_DIR
+        original_runs = ralph_loop.RUNS_DIR
+        original_lock = ralph_loop.LOCK_FILE
+        
         ralph_loop.MEMORY_DIR = Path(tmpdir)
         ralph_loop.RUNS_DIR = Path(tmpdir) / "runs"
+        ralph_loop.LOCK_FILE = Path(tmpdir) / ".running.lock"
         
         try:
             ralph_loop.set_goal("Test goal")
             ralph_loop.run_step(ralph_loop.load_settings())
+            ralph_loop.release_lock()
             ralph_loop.run_step(ralph_loop.load_settings())
+            ralph_loop.release_lock()
             
             logs = ralph_loop.get_logs(5)
             assert "Step" in logs
@@ -187,7 +210,8 @@ def test_logs():
             print("✅ test_logs passed")
         finally:
             ralph_loop.MEMORY_DIR = original_memory
-            ralph_loop.RUNS_DIR = original_memory / "runs"
+            ralph_loop.RUNS_DIR = original_runs
+            ralph_loop.LOCK_FILE = original_lock
 
 
 def test_config():
@@ -226,10 +250,12 @@ def test_token_control():
         original_memory = ralph_loop.MEMORY_DIR
         original_runs = ralph_loop.RUNS_DIR
         original_settings = ralph_loop.SETTINGS_FILE
+        original_lock = ralph_loop.LOCK_FILE
         
         ralph_loop.MEMORY_DIR = Path(tmpdir)
         ralph_loop.RUNS_DIR = Path(tmpdir) / "runs"
         ralph_loop.SETTINGS_FILE = Path(tmpdir) / ".ralph_settings.json"
+        ralph_loop.LOCK_FILE = Path(tmpdir) / ".running.lock"
         ralph_loop.ensure_memory_dir()
         
         try:
@@ -239,7 +265,9 @@ def test_token_control():
             
             # Run 2 iterations (at limit)
             ralph_loop.run_step(ralph_loop.load_settings())
+            ralph_loop.release_lock()
             ralph_loop.run_step(ralph_loop.load_settings())
+            ralph_loop.release_lock()
             
             # Should still be running (at limit, not over)
             assert ralph_loop.is_running() == True
@@ -253,6 +281,7 @@ def test_token_control():
             ralph_loop.MEMORY_DIR = original_memory
             ralph_loop.RUNS_DIR = original_runs
             ralph_loop.SETTINGS_FILE = original_settings
+            ralph_loop.LOCK_FILE = original_lock
 
 
 def main():
