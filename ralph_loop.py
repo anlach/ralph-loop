@@ -425,6 +425,57 @@ def cleanup_old_runs(max_runs: int = 50):
         shutil.rmtree(old, ignore_errors=True)
 
 
+def extract_skills() -> str:
+    """Extract skills/heuristics from completed runs (research-based improvement)."""
+    if not RUNS_DIR.exists():
+        return ""
+    
+    runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)
+    skills = []
+    
+    for run in runs[:10]:  # Look at last 10
+        rollout_file = run / "rollout.md"
+        if rollout_file.exists():
+            content = rollout_file.read_text()
+            # Look for patterns that worked
+            if "DONE" in content or "COMPLETE" in content:
+                skills.append(f"Step {run.name}: Completed successfully")
+            if "fixed" in content.lower() or "improved" in content.lower():
+                skills.append(f"Step {run.name}: Made improvements")
+    
+    return "\n".join(skills) if skills else "No skills extracted yet"
+
+
+def evolve_prompt() -> str:
+    """Evolve PROMPT.md based on what works (GEPA-inspired)."""
+    prompt_file = SKILL_DIR / "PROMPT.md"
+    if not prompt_file.exists():
+        return "PROMPT.md not found"
+    
+    current = prompt_file.read_text()
+    
+    # Check if prompt needs updating based on state
+    state = get_state()
+    
+    # Simple evolution: add lessons learned to prompt if significant
+    if "learned" in state.lower() or "insight" in state.lower():
+        # Could append lessons to PROMPT.md
+        return "Based on state, prompt evolution could help"
+    
+    return "No prompt evolution needed yet"
+
+
+def get_self_improvement_suggestions() -> str:
+    """Get suggestions for self-improvement based on research."""
+    suggestions = [
+        "1. Add skill/heuristic extraction from completed runs",
+        "2. Implement prompt evolution (GEPA-inspired)",
+        "3. Add telemetry tracking for eval-driven improvements",
+        "4. Consider integrating with Claude Code or Amp for actual coding",
+    ]
+    return "\n".join(suggestions)
+
+
 def get_logs(count: int = 5) -> str:
     """Get recent run logs."""
     if not RUNS_DIR.exists():
@@ -721,7 +772,19 @@ def handle_command(command: str, args: list, message=None) -> str:
 - `/ralph help` - Show this help
 - `/ralph usage` - Show token usage stats
 - `/ralph tune` - Auto-tune settings based on usage
-- `/ralph auto on|off` - Enable/disable auto-run mode"""
+- `/ralph auto on|off` - Enable/disable auto-run mode
+- `/ralph improve` - Show self-improvement suggestions"""
+    
+    elif command == "improve":
+        """Show self-improvement suggestions based on research."""
+        suggestions = get_self_improvement_suggestions()
+        skills = extract_skills()
+        
+        response = "🧠 **Self-Improvement Status**\n\n"
+        response += "**Suggestions:**\n" + suggestions + "\n\n"
+        response += "**Extracted Skills:**\n" + (skills if skills else "None yet")
+        
+        return response
     
     elif command == "auto":
         """Enable or disable auto-run mode with cron."""
