@@ -210,9 +210,8 @@ def run_step(settings: dict) -> dict:
     # Save the prompt
     (run_dir / "prompt.md").write_text(prompt)
     
-    # For now, return the prompt for manual execution
-    # The skill is designed to be used with sessions_spawn by the main agent
-    output = "[Prompt generated - use /ralph spawn to run subagent]"
+    # Placeholder output - will be replaced when user runs /ralph do
+    output = "[Waiting for work to be recorded with /ralph do or /ralph continue]"
     
     # Save placeholder output
     (run_dir / "rollout.md").write_text(output)
@@ -312,6 +311,7 @@ def handle_command(command: str, args: list, message=None) -> str:
         return clear_goal()
     
     elif command == "run":
+        """Generate next iteration prompt and show it."""
         if not is_running():
             return "No goal set. Use `/ralph start <goal>` first."
         
@@ -322,14 +322,21 @@ def handle_command(command: str, args: list, message=None) -> str:
         
         result = run_step(settings)
         
-        response = f"**Step {result['iteration']}** 📝\n\n"
-        response += "**Prompt generated:**\n\n"
+        # Get the latest run directory to show the path
+        runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)
+        latest_run = runs[0].name if runs else "unknown"
         
-        # Show the prompt for execution
-        prompt = result.get("prompt", "")[:1500]
-        response += f"```\n{prompt}...\n```\n\n"
-        response += "Use `/ralph spawn` to run a subagent with this prompt, "
-        response += "or `/ralph next` after completing work."
+        response = f"**Step {result['iteration']}** 📝\n\n"
+        response += f"**Goal:** {get_goal()[:100]}...\n\n"
+        
+        # Show prompt from file (it's already saved there)
+        prompt_file = RUNS_DIR / latest_run / "prompt.md"
+        if prompt_file.exists():
+            prompt = prompt_file.read_text()[:1500]
+            response += f"**Prompt:**\n```\n{prompt}...\n```\n\n"
+        
+        response += f"Prompt saved to: `memory/runs/{latest_run}/prompt.md`\n\n"
+        response += "Work on the goal, then use `/ralph do <result>` or `/ralph continue <result>` to record progress."
         
         return response
     
@@ -338,10 +345,28 @@ def handle_command(command: str, args: list, message=None) -> str:
         if not is_running():
             return "No goal set. Use `/ralph start <goal>` first."
         
-        prompt = load_prompt(goal_step=get_iteration())
-        response = "**Subagent spawn command:**\n\n"
-        response += "```\n/ralph do <result>\n```\n\n"
-        response += "_Work on the goal and report back with `/ralph do <what you did>`_"
+        current = get_iteration()
+        prompt = load_prompt(goal_step=current)
+        
+        # Get the latest run directory
+        runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)
+        latest_run = runs[0].name if runs else "unknown"
+        
+        # Build a proper spawn command with the prompt inline
+        # The prompt is quite long, so we'll create a summary + reference to prompt.md
+        response = f"**Subagent Spawn for Step {current}**\n\n"
+        response += f"_Goal: {get_goal()[:80]}..._\n\n"
+        response += f"**Full prompt saved to:** `memory/runs/{latest_run}/prompt.md`\n\n"
+        
+        # Show a preview of the prompt
+        prompt_preview = prompt[:600] + "..." if len(prompt) > 600 else prompt
+        response += f"```\n{prompt_preview}\n```\n\n"
+        
+        response += "**To spawn subagent:**\n"
+        response += "The main agent should read the full prompt from `memory/runs/<timestamp>/prompt.md` "
+        response += "and work toward the goal.\n\n"
+        response += "**When done, use:** `/ralph do <result>` - or `/ralph continue <result>` to do+next in one step"
+        
         return response
     
     elif command == "do":
@@ -377,6 +402,31 @@ def handle_command(command: str, args: list, message=None) -> str:
         
         result = run_step(settings)
         return f"**Step {result['iteration']}** ready. Use `/ralph spawn` to continue."
+
+    elif command == "continue":
+        """Combine do + next in one command for streamlined workflow."""
+        if not is_running():
+            return "No goal set. Use `/ralph start <goal>` first."
+        
+        result_text = " ".join(args)
+        
+        # Record the result first
+        record_result(result_text, done="DONE" in result_text.upper() or "COMPLETE" in result_text.upper())
+        
+        current = get_iteration()
+        
+        # Check for completion
+        if "DONE" in result_text.upper() or "COMPLETE" in result_text.upper():
+            clear_goal()
+            return "🎉 **Goal completed!** Great work."
+        
+        if current >= settings["max_iterations"]:
+            clear_goal()
+            return f"Max iterations ({settings['max_iterations']}) reached. Loop stopped."
+        
+        # Advance to next iteration automatically
+        result = run_step(settings)
+        return f"✅ Step {current} recorded.\n\n**Step {result['iteration']}** ready. Use `/ralph spawn` or `/ralph continue <result>` to continue."
     
     elif command == "prompt":
         """Show current prompt."""
@@ -387,10 +437,54 @@ def handle_command(command: str, args: list, message=None) -> str:
         return f"**Current Prompt:**\n\n{prompt}"
     
     elif command == "status":
+        """Check if running and show details."""
         if is_running():
-            goal = get_goal()[:100]
+            goal = get_goal()
             current = get_iteration()
-            return f"🔄 **Ralph Loop running**\n\n**Goal:** {goal}...\n**Iteration:** {current}/{settings['max_iterations']}"
+            
+            response = f"🔄 **Ralph Loop running**\n\n"
+            response += f"**Goal:** {goal}\n"
+            response += f"**Iteration:** {current}/{settings['max_iterations']}\n"
+            
+            # Show recent state
+            state = get_state()
+            if state and len(state) > 100:
+                response += f"\n**Recent state:** {state[:200]}..."
+            elif state:
+                response += f"\n**State:** {state[:200]}..."
+            
+            # Show latest run info
+            runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)
+            if runs:
+                latest = runs[0]
+                metadata_file = latest / "metadata.json"
+                rollout_file = latest / "rollout.md"
+                
+                if metadata_file.exists():
+                    metadata = json.loads(metadata_file.read_text())
+                    status_emoji = "⏳" if metadata.get("pending") else "✅" if metadata.get("done") else "📝"
+                    response += f"\n\n**Latest run:** {status_emoji} Step {metadata.get('step', '?')}"
+                
+                if rollout_file.exists():
+                    rollout = rollout_file.read_text()[:150].replace("\n", " ")
+                    if rollout and rollout != "[Prompt generated - use /ralph spawn to run subagent]":
+                        response += f"\n**Output:** {rollout}..."
+            
+            return response
+        
+        # Not running - show recent activity
+        runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)[:3]
+        if runs:
+            response = "⏸️ **Ralph Loop is not running.**\n\n**Recent activity:**\n"
+            for run in runs:
+                metadata_file = run / "metadata.json"
+                if metadata_file.exists():
+                    metadata = json.loads(metadata_file.read_text())
+                    step = metadata.get("step", "?")
+                    done = metadata.get("done", False)
+                    response += f"- Step {step}: {'✅ complete' if done else '📝 pending'}\n"
+            return response
+        
         return "⏸️ Ralph Loop is not running."
     
     elif command == "logs":
@@ -437,11 +531,12 @@ def handle_command(command: str, args: list, message=None) -> str:
         return """**Ralph Commands:**
 - `/ralph start <goal>` - Set goal and begin
 - `/ralph run` - Generate next iteration prompt
-- `/ralph spawn` - Get subagent spawn guidance
+- `/ralph spawn` - Show subagent spawn guidance  
 - `/ralph do <result>` - Record work done
+- `/ralph continue <result>` - Record result AND advance to next step
 - `/ralph next` - Advance to next iteration
 - `/ralph prompt` - Show current prompt
-- `/ralph status` - Check if running
+- `/ralph status` - Check if running (detailed)
 - `/ralph logs [n]` - View recent runs
 - `/ralph clear` - Clean up old runs
 - `/ralph state` - Show current state

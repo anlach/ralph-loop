@@ -55,30 +55,32 @@ Each iteration:
 /ralph start Build a Python script that analyzes stock prices
 
 # Control the loop:
-/ralph run      # Generate next iteration prompt
-/ralph spawn    # Get subagent guidance
-/ralph do <result>  # Record work done
-/ralph next     # Advance to next iteration
-/ralph prompt   # Show current prompt
-/ralph status   # Check if running
-/ralph logs     # View recent runs
-/ralph state    # Show current state
-/ralph clear    # Clean up old runs
-/ralph stop     # Halt
-/ralph config   # Show settings
+/ralph run              # Generate next iteration prompt
+/ralph spawn            # Show subagent guidance with full prompt path
+/ralph do <result>      # Record work done
+/ralph continue <result> # Record result AND advance to next step (combined)
+/ralph next             # Advance to next iteration
+/ralph prompt           # Show current prompt
+/ralph status           # Check if running (detailed view)
+/ralph logs [n]         # View recent runs
+/ralph state            # Show current state
+/ralph clear            # Clean up old runs
+/ralph stop             # Halt
+/ralph config           # Show settings
 /ralph config-set <key> <value>  # Update setting
-/ralph help     # Show this help
+/ralph help             # Show this help
 ```
 
 ## Workflow Example
 
 ```
 /ralph start Improve the ralph-loop skill
-/ralph run        # Generates prompt for iteration 1
-/ralph do Fixed path bugs and improved commands
-/ralph run        # Generates prompt for iteration 2
-/ralph do Added /ralph logs and /ralph state commands - DONE
+/ralph run                    # Generates prompt for iteration 1
+/ralph continue Fixed bugs   # Record result AND move to step 2
+/ralph continue More fixes - DONE   # Goal completed
 ```
+
+**Streamlined workflow:** Use `/ralph continue <result>` instead of separate do + next commands!
 
 ## Configuration
 
