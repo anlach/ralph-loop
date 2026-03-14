@@ -1,0 +1,3 @@
+memory/
+*.pyc
+__pycache__/
