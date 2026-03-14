@@ -14,9 +14,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# Paths
-WORKSPACE = Path(os.environ.get("OPENCLAW_WORKSPACE", "/home/linuxuser/.openclaw/workspace"))
-MEMORY_DIR = WORKSPACE / "memory"
+# Paths - use skill's own directory, not workspace
+SKILL_DIR = Path(__file__).parent
+MEMORY_DIR = SKILL_DIR / "memory"
 RUNS_DIR = MEMORY_DIR / "runs"
 
 # Files
@@ -33,6 +33,8 @@ DEFAULT_SETTINGS = {
     "model": "chutes/MiniMaxAI/MiniMax-M2.5-TEE",
     "max_retries": 3,
     "timeout": 600,
+    "auto_mode": False,
+    "auto_delay": 5,  # seconds between iterations
 }
 
 
@@ -200,59 +202,24 @@ def _redact_secrets(text: str) -> str:
 
 
 def spawn_subagent(prompt: str, model: str, timeout: int) -> dict:
-    """Spawn a subagent to execute the prompt using openclaw agent."""
+    """Spawn a subagent to execute the prompt using sessions_spawn.
     
-    # Create a temporary file with the prompt
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
-        f.write(prompt)
-        prompt_file = f.name
+    This returns the prompt that should be sent - actual spawning is done by the caller.
+    """
+    # Truncate prompt if too long
+    max_msg_len = 50000
+    if len(prompt) > max_msg_len:
+        prompt = prompt[:max_msg_len] + "\n\n[truncated...]"
     
-    try:
-        # Use openclaw agent with local mode and prompt from file
-        result = subprocess.run(
-            ["openclaw", "agent", 
-             "--local",
-             "--message", f"Execute the task in this prompt:\n\n[paste from {prompt_file}]",
-             "--model", model,
-             "--timeout", str(timeout)],
-            capture_output=True,
-            text=True,
-            timeout=timeout + 30,
-        )
-        
-        output = result.stdout
-        if not output and result.stderr:
-            output = result.stderr
-        
-        return {
-            "success": result.returncode == 0,
-            "output": output,
-            "error": result.stderr if result.returncode != 0 else None,
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "output": "",
-            "error": "Timeout",
-        }
-    except FileNotFoundError:
-        return {
-            "success": False,
-            "output": "",
-            "error": "openclaw CLI not found",
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "output": "",
-            "error": str(e),
-        }
-    finally:
-        try:
-            os.unlink(prompt_file)
-        except:
-            pass
+    # Return structured info for the caller to spawn
+    return {
+        "success": True,
+        "prompt": prompt,
+        "model": model,
+        "timeout": timeout,
+        "output": None,
+        "error": None,
+    }
 
 
 def run_step(settings: dict) -> dict:
@@ -380,6 +347,27 @@ def handle_command(command: str, args: list, message=None) -> str:
         
         settings[key] = value
         save_settings(settings)
+        
+        # If auto_frequency changed, update cron job
+        if key == "auto_frequency" and settings.get("auto_mode"):
+            import subprocess
+            # Get cron job ID
+            result = subprocess.run(
+                ["openclaw", "cron", "list", "--json"],
+                capture_output=True,
+                text=True,
+            )
+            import re
+            match = re.search(r'([a-f0-9-]{36})\s+ralph-loop', result.stdout)
+            if match:
+                cron_id = match.group(1)
+                subprocess.run(
+                    ["openclaw", "cron", "edit", cron_id, "--every", value],
+                    capture_output=True,
+                )
+                return f"Updated {key} = {value}\nCron job updated to run every {value}."
+            return f"Updated {key} = {value} (could not update cron)"
+        
         return f"Updated {key} = {value}"
     
     elif command == "help":
@@ -390,7 +378,45 @@ def handle_command(command: str, args: list, message=None) -> str:
 - `/ralph stop` - Halt
 - `/ralph config` - Show settings
 - `/ralph config-set <key> <value>` - Update setting
+- `/ralph auto on` - Enable auto-run mode
+- `/ralph auto off` - Disable auto-run mode
 - `/ralph help` - Show this help"""
+    
+    elif command == "auto":
+        if not args:
+            settings = load_settings()
+            auto_on = settings.get("auto_mode", False)
+            return f"Auto-run mode is {'ON' if auto_on else 'OFF'}"
+        
+        if args[0] == "on":
+            # Create cron job
+            import subprocess
+            cron_result = subprocess.run(
+                ["openclaw", "cron", "add",
+                 "--name", "ralph-loop",
+                 "--every", "1m",
+                 "--message", "/ralph run"],
+                capture_output=True,
+                text=True,
+            )
+            
+            if cron_result.returncode == 0:
+                settings["auto_mode"] = True
+                save_settings(settings)
+                return "✅ Auto-run enabled! Cron job created (runs every minute).\n\nUse `/ralph auto off` to disable."
+            else:
+                return f"❌ Failed to create cron job: {cron_result.stderr}"
+        
+        elif args[0] == "off":
+            # Remove cron job
+            import subprocess
+            subprocess.run(
+                ["openclaw", "cron", "rm", "ralph-loop"],
+                capture_output=True,
+            )
+            settings["auto_mode"] = False
+            save_settings(settings)
+            return "⏹ Auto-run disabled. Cron job removed."
     
     else:
         return f"Unknown command: {command}\n\nTry `/ralph help`"
@@ -402,6 +428,11 @@ def check_and_run_loop():
         return None
     
     settings = load_settings()
+    
+    # Check if auto mode is enabled
+    if not settings.get("auto_mode", False):
+        return None
+    
     current = get_iteration()
     
     if current >= settings["max_iterations"]:

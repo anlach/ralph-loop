@@ -56,6 +56,8 @@ Each iteration:
 
 # Then control the loop:
 /ralph run     # Execute one iteration
+/ralph auto on # Enable auto-run mode (runs automatically)
+/ralph auto off # Disable auto-run mode
 /ralph status  # Check if running
 /ralph stop    # Halt
 /ralph config  # Show settings
@@ -72,7 +74,9 @@ Edit `memory/.ralph_settings.json`:
   "max_cost": null,
   "model": "chutes/MiniMaxAI/MiniMax-M2.5-TEE",
   "timeout": 600,
-  "max_retries": 3
+  "max_retries": 3,
+  "auto_mode": false,
+  "auto_delay": 5
 }
 ```
 
@@ -83,6 +87,8 @@ Edit `memory/.ralph_settings.json`:
 | `model` | MiniMax-M2.5-TEE | Model to use |
 | `timeout` | 600 | Seconds per iteration |
 | `max_retries` | 3 | Retries on failure |
+| `auto_mode` | false | Run automatically on heartbeat |
+| `auto_delay` | 5 | Seconds between iterations |
 
 ## Key Differences from Arbos
 
