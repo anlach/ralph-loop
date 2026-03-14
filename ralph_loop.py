@@ -37,7 +37,7 @@ DEFAULT_SETTINGS = {
     "timeout": 600,
     "auto_mode": False,
     "auto_delay": 5,
-    "auto_frequency": "1m",  # How often to run in auto mode
+    "auto_frequency": "10m",  # How often cron runs
     "learn_from_usage": True,  # Self-improvement: track what works
     "usage_stats": {},  # Track token usage over time
 }
@@ -450,7 +450,7 @@ def handle_command(command: str, args: list, message=None) -> str:
         set_goal(goal)
         
         # Set up cron to run automatically
-        freq = settings.get("auto_frequency", "1m")
+        freq = settings.get("auto_frequency", "10m")
         try:
             import subprocess
             # Remove any existing cron first
@@ -738,7 +738,7 @@ def handle_command(command: str, args: list, message=None) -> str:
         """Enable or disable auto-run mode with cron."""
         if not args:
             auto_on = settings.get("auto_mode", False)
-            freq = settings.get("auto_frequency", "1m")
+            freq = settings.get("auto_frequency", "10m")
             return f"Auto-run: **{'ON' if auto_on else 'OFF'}** (frequency: {freq})"
         
         action = args[0].lower()
@@ -749,7 +749,7 @@ def handle_command(command: str, args: list, message=None) -> str:
                 return "Set a goal first with `/ralph start <goal>`"
             
             # Create cron job
-            freq = settings.get("auto_frequency", "1m")
+            freq = settings.get("auto_frequency", "10m")
             try:
                 import subprocess
                 result = subprocess.run(

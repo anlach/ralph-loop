@@ -69,7 +69,7 @@ Edit `memory/.ralph_settings.json`:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `max_iterations` | 10 | Stop after N iterations |
-| `auto_frequency` | "1m" | Cron frequency |
+| `auto_frequency` | "10m" | Cron frequency |
 | `learn_from_usage` | true | Enable usage tracking |
 
 ## Workflow Example
