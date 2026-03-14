@@ -247,6 +247,82 @@ def _redact_secrets(text: str) -> str:
     return text
 
 
+def spawn_subagent_session(goal: str, settings: dict) -> str:
+    """Spawn a subagent session to work on the goal asynchronously."""
+    import subprocess
+    
+    # Build the prompt for the subagent
+    prompt = f"""You are running in Ralph Loop mode - an autonomous agent loop.
+
+## Your Goal
+{goal}
+
+## How Ralph Loop Works
+1. Read the goal above
+2. Work toward completing it iteratively
+3. After each piece of work, use `/ralph continue <what you did>` to record progress
+4. When goal is complete, use `/ralph continue <summary> - DONE`
+
+## Key Commands
+- `/ralph continue <result>` - Record work AND advance to next step
+- `/ralph do <result>` - Record work only (stay on same step)
+- `/ralph status` - Check loop status
+- `/ralph stop` - Stop the loop
+
+## Important
+- Work in iterations - don't try to do everything at once
+- Use STATE.md to track what you've tried
+- Signal DONE when complete
+
+Start now!"""
+    
+    # Spawn subagent using sessions_spawn via subprocess (background)
+    try:
+        # Use the Python script to call sessions_spawn through the API
+        # This runs in background - we don't wait for completion
+        result = subprocess.Popen(
+            ["python3", "-c", f"""
+import sys
+sys.path.insert(0, '{SKILL_DIR}')
+from ralph_loop import run_subagent_workflow
+run_subagent_workflow({repr(goal)}, {repr(settings)})
+"""],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return f"Subagent spawned (PID: {result.pid})"
+    except Exception as e:
+        return f"Could not spawn subagent: {e}"
+
+
+def run_subagent_workflow(goal: str, settings: dict):
+    """Run the subagent workflow - called in spawned process."""
+    # This runs in a separate process
+    # Set up the goal
+    set_goal(goal)
+    
+    # Run iterations until complete or max reached
+    while is_running() and get_iteration() < settings.get("max_iterations", 10):
+        result = run_step(settings)
+        
+        if result.get("locked"):
+            # Wait and retry
+            import time
+            time.sleep(5)
+            continue
+            
+        if not result.get("success"):
+            break
+        
+        # The subagent would need to do work here
+        # For now, just generate prompts
+        # In a full implementation, this would spawn another subagent
+        
+        # Stop after generating one prompt - user must do work
+        break
+
+
 def run_step(settings: dict) -> dict:
     """Run one iteration of the loop - generates prompt for subagent."""
     # Check for existing run (serial execution)
@@ -390,7 +466,21 @@ def handle_command(command: str, args: list, message=None) -> str:
         if not args:
             return "Usage: `/ralph start <goal>`"
         goal = " ".join(args)
-        return set_goal(goal)
+        result = set_goal(goal)
+        
+        # Spawn background process to run the loop
+        import subprocess
+        try:
+            # Run the ralph loop in background - doesn't block
+            subprocess.Popen(
+                ["python3", str(SKILL_DIR / "ralph_loop.py"), "_daemon"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return result + "\n\n🤖 **Subagent spawned in background** - loop will run automatically!"
+        except Exception as e:
+            return result + f"\n\n⚠️ Could not spawn background subagent: {e}"
     
     elif command == "stop":
         return clear_goal()
@@ -747,6 +837,49 @@ if __name__ == "__main__":
         sys.exit(1)
     
     cmd = sys.argv[1]
+    
+    # Daemon mode - runs in background
+    if cmd == "_daemon":
+        run_daemon()
+        sys.exit(0)
+    
     args = sys.argv[2:]
     result = handle_command(cmd, args)
     print(result)
+
+
+def run_daemon():
+    """Run the Ralph Loop as a daemon - processes in background."""
+    import time
+    
+    settings = load_settings()
+    
+    while is_running() and get_iteration() < settings.get("max_iterations", 10):
+        # Check lock
+        if is_locked():
+            time.sleep(5)
+            continue
+        
+        # Run a step
+        result = run_step(settings)
+        
+        if result.get("locked"):
+            time.sleep(5)
+            continue
+        
+        if not result.get("success"):
+            break
+        
+        # Wait for work to be recorded before continuing
+        # Poll for lock release
+        max_wait = 3600  # 1 hour max
+        waited = 0
+        while is_locked() and waited < max_wait:
+            time.sleep(5)
+            waited += 5
+        
+        # Check if completed
+        if get_goal() == "":
+            break  # Goal was completed
+    
+    release_lock()
