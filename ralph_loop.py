@@ -3,18 +3,18 @@
 Ralph Loop - Self-improving agent loop for OpenClaw
 
 Based on Arbos (https://github.com/unconst/Arbos), adapted for OpenClaw.
+Manages iterative goal-driven work with state tracking.
 """
 
 import json
 import os
 import re
-import subprocess
-import time
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# Paths - use skill's own directory, not workspace
+# Paths - use skill's own directory
 SKILL_DIR = Path(__file__).parent
 MEMORY_DIR = SKILL_DIR / "memory"
 RUNS_DIR = MEMORY_DIR / "runs"
@@ -34,13 +34,14 @@ DEFAULT_SETTINGS = {
     "max_retries": 3,
     "timeout": 600,
     "auto_mode": False,
-    "auto_delay": 5,  # seconds between iterations
+    "auto_delay": 5,
 }
 
 
 def ensure_memory_dir():
     """Ensure memory directory exists."""
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load_settings() -> dict:
@@ -65,7 +66,7 @@ def load_prompt(consume_inbox: bool = False, goal_step: int = 0) -> str:
     parts = []
 
     # PROMPT.md (from skill directory)
-    prompt_file = Path(__file__).parent / "PROMPT.md"
+    prompt_file = SKILL_DIR / "PROMPT.md"
     if prompt_file.exists():
         parts.append(prompt_file.read_text().strip())
 
@@ -90,14 +91,14 @@ def load_prompt(consume_inbox: bool = False, goal_step: int = 0) -> str:
             if consume_inbox:
                 INBOX_FILE.write_text("")
 
-    # Previous run results (last one only to save context)
+    # Previous run results (last one only)
     if RUNS_DIR.exists():
-        runs = sorted(RUNS_DIR.glob("*"), reverse=True)
+        runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)
         if runs:
             last_run = runs[0]
             rollout = last_run / "rollout.md"
             if rollout.exists():
-                last_output = rollout.read_text()[:8000]  # Limit context
+                last_output = rollout.read_text()[:8000]
                 parts.append(f"## Previous Run Output\n\n{last_output}")
 
     return "\n\n".join(parts)
@@ -106,7 +107,6 @@ def load_prompt(consume_inbox: bool = False, goal_step: int = 0) -> str:
 def make_run_dir() -> Path:
     """Create a new run directory."""
     ensure_memory_dir()
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = RUNS_DIR / ts
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -129,7 +129,7 @@ def set_goal(goal: str) -> str:
     settings["current_iteration"] = 0
     save_settings(settings)
     
-    return f"Ralph Loop started!\n\n**Goal:** {goal}\n\nRun `/ralph run` to execute iterations."
+    return f"🎯 **Ralph Loop started!**\n\n**Goal:** {goal}\n\nRun `/ralph run` to execute iterations."
 
 
 def clear_goal() -> str:
@@ -143,7 +143,7 @@ def clear_goal() -> str:
     settings["current_iteration"] = 0
     save_settings(settings)
     
-    return "Ralph Loop stopped."
+    return "⏹ Ralph Loop stopped."
 
 
 def get_goal() -> str:
@@ -201,29 +201,8 @@ def _redact_secrets(text: str) -> str:
     return text
 
 
-def spawn_subagent(prompt: str, model: str, timeout: int) -> dict:
-    """Spawn a subagent to execute the prompt using sessions_spawn.
-    
-    This returns the prompt that should be sent - actual spawning is done by the caller.
-    """
-    # Truncate prompt if too long
-    max_msg_len = 50000
-    if len(prompt) > max_msg_len:
-        prompt = prompt[:max_msg_len] + "\n\n[truncated...]"
-    
-    # Return structured info for the caller to spawn
-    return {
-        "success": True,
-        "prompt": prompt,
-        "model": model,
-        "timeout": timeout,
-        "output": None,
-        "error": None,
-    }
-
-
 def run_step(settings: dict) -> dict:
-    """Run one iteration of the loop."""
+    """Run one iteration of the loop - generates prompt for subagent."""
     goal_step = increment_iteration()
     prompt = load_prompt(consume_inbox=True, goal_step=goal_step)
     run_dir = make_run_dir()
@@ -231,50 +210,94 @@ def run_step(settings: dict) -> dict:
     # Save the prompt
     (run_dir / "prompt.md").write_text(prompt)
     
-    # Run the subagent
-    result = spawn_subagent(
-        prompt=prompt,
-        model=settings.get("model", DEFAULT_SETTINGS["model"]),
-        timeout=settings.get("timeout", DEFAULT_SETTINGS["timeout"]),
-    )
+    # For now, return the prompt for manual execution
+    # The skill is designed to be used with sessions_spawn by the main agent
+    output = "[Prompt generated - use /ralph spawn to run subagent]"
     
-    # Redact secrets from output
-    output = result.get("output", "")
-    output = _redact_secrets(output)
-    
-    # Save output
+    # Save placeholder output
     (run_dir / "rollout.md").write_text(output)
     (run_dir / "metadata.json").write_text(json.dumps({
         "step": goal_step,
         "timestamp": datetime.now().isoformat(),
         "model": settings.get("model", DEFAULT_SETTINGS["model"]),
-        "success": result.get("success", False),
-        "error": result.get("error"),
+        "pending": True,
     }, indent=2))
     
-    # Check for DONE signal
-    done = "DONE" in output.upper() or "COMPLETE" in output.upper()
-    
     return {
-        **result,
+        "success": True,
         "output": output,
-        "done": done,
+        "prompt": prompt,
+        "done": False,
         "iteration": goal_step,
     }
 
 
+def record_result(output: str, done: bool = False) -> None:
+    """Record the result of a subagent run."""
+    if not RUNS_DIR.exists():
+        return
+    
+    runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)
+    if runs:
+        last_run = runs[0]
+        output = _redact_secrets(output)
+        (last_run / "rollout.md").write_text(output)
+        
+        # Update metadata
+        metadata = json.loads((last_run / "metadata.json").read_text())
+        metadata["pending"] = False
+        metadata["done"] = done
+        metadata["completed_at"] = datetime.now().isoformat()
+        (last_run / "metadata.json").write_text(json.dumps(metadata, indent=2))
+        
+        # Update state with summary
+        if done:
+            update_state("✅ Goal marked as complete!")
+
+
 def cleanup_old_runs(max_runs: int = 50):
-    """Remove old run directories, keeping most recent."""
+    """Remove old run directories."""
     if not RUNS_DIR.exists():
         return
     
     runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)
     for old in runs[max_runs:]:
-        import shutil
         shutil.rmtree(old, ignore_errors=True)
 
 
-# CLI handler - called by skill when message matches
+def get_logs(count: int = 5) -> str:
+    """Get recent run logs."""
+    if not RUNS_DIR.exists():
+        return "No runs yet."
+    
+    runs = sorted(RUNS_DIR.glob("*"), key=lambda x: x.name, reverse=True)[:count]
+    if not runs:
+        return "No runs yet."
+    
+    lines = ["**Recent Runs:**\n"]
+    for run in runs:
+        metadata_file = run / "metadata.json"
+        rollout_file = run / "rollout.md"
+        
+        if metadata_file.exists():
+            metadata = json.loads(metadata_file.read_text())
+            step = metadata.get("step", "?")
+            timestamp = metadata.get("timestamp", "")[:19]
+            pending = "⏳" if metadata.get("pending") else "✅" if metadata.get("done") else "📝"
+            
+            # Get snippet of output
+            snippet = ""
+            if rollout_file.exists():
+                content = rollout_file.read_text()[:100].replace("\n", " ")
+                if content:
+                    snippet = f" — {content}..."
+            
+            lines.append(f"{pending} **Step {step}** ({timestamp}){snippet}")
+    
+    return "\n".join(lines)
+
+
+# CLI handler
 def handle_command(command: str, args: list, message=None) -> str:
     """Handle user commands."""
     settings = load_settings()
@@ -292,43 +315,104 @@ def handle_command(command: str, args: list, message=None) -> str:
         if not is_running():
             return "No goal set. Use `/ralph start <goal>` first."
         
-        # Check max iterations
         current = get_iteration()
         if current >= settings["max_iterations"]:
             clear_goal()
             return f"Reached max iterations ({settings['max_iterations']}). Loop stopped."
         
-        # Run one step
         result = run_step(settings)
         
-        # Build response
-        status = "✅" if result.get("success") else "❌"
-        response = f"**Step {result['iteration']}** {status}\n\n"
+        response = f"**Step {result['iteration']}** 📝\n\n"
+        response += "**Prompt generated:**\n\n"
         
-        if result.get("done"):
-            response += "🎉 Goal completed!\n\n"
-            clear_goal()
-        elif result["iteration"] >= settings["max_iterations"]:
-            response += "Max iterations reached.\n\n"
-            clear_goal()
-        
-        # Add output snippet
-        output = result.get("output", "")
-        if output:
-            snippet = output[:500] + "..." if len(output) > 500 else output
-            response += f"```\n{snippet}\n```"
+        # Show the prompt for execution
+        prompt = result.get("prompt", "")[:1500]
+        response += f"```\n{prompt}...\n```\n\n"
+        response += "Use `/ralph spawn` to run a subagent with this prompt, "
+        response += "or `/ralph next` after completing work."
         
         return response
+    
+    elif command == "spawn":
+        """Generate spawn command for subagent."""
+        if not is_running():
+            return "No goal set. Use `/ralph start <goal>` first."
+        
+        prompt = load_prompt(goal_step=get_iteration())
+        response = "**Subagent spawn command:**\n\n"
+        response += "```\n/ralph do <result>\n```\n\n"
+        response += "_Work on the goal and report back with `/ralph do <what you did>`_"
+        return response
+    
+    elif command == "do":
+        """Record result from subagent/operator."""
+        if not is_running():
+            return "No goal set. Use `/ralph start <goal>` first."
+        
+        result_text = " ".join(args)
+        record_result(result_text, done="DONE" in result_text.upper() or "COMPLETE" in result_text.upper())
+        
+        current = get_iteration()
+        
+        # Check for completion
+        if "DONE" in result_text.upper() or "COMPLETE" in result_text.upper():
+            clear_goal()
+            return "🎉 **Goal completed!** Great work."
+        
+        if current >= settings["max_iterations"]:
+            clear_goal()
+            return f"Max iterations ({settings['max_iterations']}) reached. Loop stopped."
+        
+        return f"✅ Step {current} recorded. Run `/ralph run` for next iteration."
+    
+    elif command == "next":
+        """Advance to next iteration after work is done."""
+        if not is_running():
+            return "No goal set."
+        
+        current = get_iteration()
+        if current >= settings["max_iterations"]:
+            clear_goal()
+            return f"Max iterations ({settings['max_iterations']}) reached."
+        
+        result = run_step(settings)
+        return f"**Step {result['iteration']}** ready. Use `/ralph spawn` to continue."
+    
+    elif command == "prompt":
+        """Show current prompt."""
+        if not is_running():
+            return "No goal set."
+        
+        prompt = load_prompt(goal_step=get_iteration())
+        return f"**Current Prompt:**\n\n{prompt}"
     
     elif command == "status":
         if is_running():
             goal = get_goal()[:100]
             current = get_iteration()
-            return f"🔄 Ralph Loop is running.\n\n**Goal:** {goal}...\n**Iteration:** {current}/{settings['max_iterations']}"
+            return f"🔄 **Ralph Loop running**\n\n**Goal:** {goal}...\n**Iteration:** {current}/{settings['max_iterations']}"
         return "⏸️ Ralph Loop is not running."
     
+    elif command == "logs":
+        count = 5
+        if args and args[0].isdigit():
+            count = int(args[0])
+        return get_logs(count)
+    
+    elif command == "clear":
+        """Clean up old runs."""
+        cleanup_old_runs()
+        return "🧹 Old runs cleaned up."
+    
+    elif command == "state":
+        """Show current state."""
+        state = get_state()
+        if state:
+            return f"**State:**\n\n{state}"
+        return "No state yet."
+    
     elif command == "config":
-        return f"**Current Settings:**\n\n```json\n{json.dumps(settings, indent=2)}\n```"
+        return f"**Settings:**\n\n```json\n{json.dumps(settings, indent=2)}\n```"
     
     elif command == "config-set":
         if len(args) < 2:
@@ -336,120 +420,38 @@ def handle_command(command: str, args: list, message=None) -> str:
         key = args[0]
         value = args[1]
         
-        # Try to parse as number
         try:
             value = int(value)
         except ValueError:
             try:
                 value = float(value)
             except ValueError:
-                pass
+                if value.lower() in ("true", "false"):
+                    value = value.lower() == "true"
         
         settings[key] = value
         save_settings(settings)
-        
-        # If auto_frequency changed, update cron job
-        if key == "auto_frequency" and settings.get("auto_mode"):
-            import subprocess
-            # Get cron job ID
-            result = subprocess.run(
-                ["openclaw", "cron", "list", "--json"],
-                capture_output=True,
-                text=True,
-            )
-            import re
-            match = re.search(r'([a-f0-9-]{36})\s+ralph-loop', result.stdout)
-            if match:
-                cron_id = match.group(1)
-                subprocess.run(
-                    ["openclaw", "cron", "edit", cron_id, "--every", value],
-                    capture_output=True,
-                )
-                return f"Updated {key} = {value}\nCron job updated to run every {value}."
-            return f"Updated {key} = {value} (could not update cron)"
-        
-        return f"Updated {key} = {value}"
+        return f"✅ Updated {key} = {value}"
     
     elif command == "help":
         return """**Ralph Commands:**
 - `/ralph start <goal>` - Set goal and begin
-- `/ralph run` - Execute one iteration
+- `/ralph run` - Generate next iteration prompt
+- `/ralph spawn` - Get subagent spawn guidance
+- `/ralph do <result>` - Record work done
+- `/ralph next` - Advance to next iteration
+- `/ralph prompt` - Show current prompt
 - `/ralph status` - Check if running
+- `/ralph logs [n]` - View recent runs
+- `/ralph clear` - Clean up old runs
+- `/ralph state` - Show current state
 - `/ralph stop` - Halt
 - `/ralph config` - Show settings
 - `/ralph config-set <key> <value>` - Update setting
-- `/ralph auto on` - Enable auto-run mode
-- `/ralph auto off` - Disable auto-run mode
 - `/ralph help` - Show this help"""
-    
-    elif command == "auto":
-        if not args:
-            settings = load_settings()
-            auto_on = settings.get("auto_mode", False)
-            return f"Auto-run mode is {'ON' if auto_on else 'OFF'}"
-        
-        if args[0] == "on":
-            # Create cron job
-            import subprocess
-            cron_result = subprocess.run(
-                ["openclaw", "cron", "add",
-                 "--name", "ralph-loop",
-                 "--every", "1m",
-                 "--message", "/ralph run"],
-                capture_output=True,
-                text=True,
-            )
-            
-            if cron_result.returncode == 0:
-                settings["auto_mode"] = True
-                save_settings(settings)
-                return "✅ Auto-run enabled! Cron job created (runs every minute).\n\nUse `/ralph auto off` to disable."
-            else:
-                return f"❌ Failed to create cron job: {cron_result.stderr}"
-        
-        elif args[0] == "off":
-            # Remove cron job
-            import subprocess
-            subprocess.run(
-                ["openclaw", "cron", "rm", "ralph-loop"],
-                capture_output=True,
-            )
-            settings["auto_mode"] = False
-            save_settings(settings)
-            return "⏹ Auto-run disabled. Cron job removed."
     
     else:
         return f"Unknown command: {command}\n\nTry `/ralph help`"
-
-
-def check_and_run_loop():
-    """Check if loop should run (for heartbeat)."""
-    if not is_running():
-        return None
-    
-    settings = load_settings()
-    
-    # Check if auto mode is enabled
-    if not settings.get("auto_mode", False):
-        return None
-    
-    current = get_iteration()
-    
-    if current >= settings["max_iterations"]:
-        clear_goal()
-        return "Max iterations reached, loop stopped."
-    
-    result = run_step(settings)
-    
-    if result.get("done"):
-        clear_goal()
-        return f"Goal completed after {result['iteration']} iterations!"
-    
-    if current >= settings["max_iterations"]:
-        clear_goal()
-        return f"Max iterations ({settings['max_iterations']}) reached."
-    
-    return f"Step {result['iteration']} complete."
 
 
 if __name__ == "__main__":

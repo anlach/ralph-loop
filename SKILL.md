@@ -1,6 +1,6 @@
 ---
 name: ralph
-description: Self-improving agent loop that iteratively works toward a goal using subagents. Based on Arbos pattern. Use /ralph start <goal> to begin.
+description: Self-improving agent loop that iteratively works toward a goal. Use /ralph start <goal> to begin.
 metadata:
   {
     "openclaw": {
@@ -12,11 +12,11 @@ metadata:
 # Ralph Loop Skill
 
 ## Overview
-A self-improving agent loop that iteratively works toward a goal using subagents. Based on the Arbos pattern (MIT licensed), adapted for OpenClaw.
+A goal-tracking loop that iteratively works toward an objective with state persistence. Based on the Arbos pattern (MIT licensed), adapted for OpenClaw.
 
 ## Concept
 ```
-GOAL.md → Subagent → Results → Reflect → Improved Approach → Loop
+Goal → Generate Prompt → Work → Record Result → Reflect → Repeat
 ```
 
 ## Files
@@ -30,14 +30,14 @@ GOAL.md → Subagent → Results → Reflect → Improved Approach → Loop
 ### Setup
 1. User sets a goal with `/ralph start <goal>`
 2. Goal is saved to `memory/GOAL.md`
-3. Each iteration spawns a subagent with full context
+3. Each iteration generates a prompt and tracks progress
 
 ### The Loop
 Each iteration:
 1. **Build prompt**: PROMPT.md + GOAL.md + STATE.md + INBOX.md + previous results
-2. **Run subagent**: Spawn coding subagent to work toward goal
-3. **Reflect**: Analyze results, identify improvements
-4. **Update STATE.md**: Document what worked/didn't for next iteration
+2. **Work**: Operator or subagent works on the goal
+3. **Record**: Use `/ralph do <result>` to record progress
+4. **Reflect**: Update STATE.md with what worked/didn't
 5. **Repeat**: Until goal is achieved or max iterations
 
 ### State Files
@@ -45,7 +45,7 @@ Each iteration:
 |------|---------|
 | `memory/GOAL.md` | Objective (set by user) |
 | `memory/STATE.md` | Working memory (persists between steps) |
-| `memory/INBOX.md` | Messages from user (cleared after each step) |
+| `memory/INBOX.md` | Messages (cleared after each step) |
 | `memory/runs/` | Each iteration's output |
 | `memory/.ralph_settings.json` | Configuration |
 
@@ -54,14 +54,30 @@ Each iteration:
 ```
 /ralph start Build a Python script that analyzes stock prices
 
-# Then control the loop:
-/ralph run     # Execute one iteration
-/ralph auto on # Enable auto-run mode (runs automatically)
-/ralph auto off # Disable auto-run mode
-/ralph status  # Check if running
-/ralph stop    # Halt
-/ralph config  # Show settings
-/ralph help    # Show help
+# Control the loop:
+/ralph run      # Generate next iteration prompt
+/ralph spawn    # Get subagent guidance
+/ralph do <result>  # Record work done
+/ralph next     # Advance to next iteration
+/ralph prompt   # Show current prompt
+/ralph status   # Check if running
+/ralph logs     # View recent runs
+/ralph state    # Show current state
+/ralph clear    # Clean up old runs
+/ralph stop     # Halt
+/ralph config   # Show settings
+/ralph config-set <key> <value>  # Update setting
+/ralph help     # Show this help
+```
+
+## Workflow Example
+
+```
+/ralph start Improve the ralph-loop skill
+/ralph run        # Generates prompt for iteration 1
+/ralph do Fixed path bugs and improved commands
+/ralph run        # Generates prompt for iteration 2
+/ralph do Added /ralph logs and /ralph state commands - DONE
 ```
 
 ## Configuration
@@ -88,29 +104,20 @@ Edit `memory/.ralph_settings.json`:
 | `timeout` | 600 | Seconds per iteration |
 | `max_retries` | 3 | Retries on failure |
 | `auto_mode` | false | Run automatically on heartbeat |
-| `auto_delay` | 5 | Seconds between iterations |
 
 ## Key Differences from Arbos
 
 | Arbos | Ralph Loop (OpenClaw) |
 |-------|----------------------|
 | Telegram | OpenClaw messages |
-| Claude Code CLI | `sessions_spawn` subagent |
+| Claude Code CLI | Built-in prompt generation |
 | `context/` | `memory/` |
 | pm2 process | OpenClaw session |
-| Encrypted .env | OpenClaw credential storage |
-| while True loop | Heartbeat + commands |
-
-## Agent Instructions
-
-The subagent receives instructions from `PROMPT.md`:
-- Design systems, not one-offs
-- Use STATE.md for continuity between iterations
-- Signal completion with "DONE" or "COMPLETE"
+| while True loop | Commands + heartbeat |
 
 ## Success Criteria
 
 Goal is achieved when:
-- Agent signals DONE/COMPLETE
+- Agent signals DONE/COMPLETE in `/ralph do` result
 - Max iterations reached
 - User sends `/ralph stop`
