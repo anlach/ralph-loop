@@ -1,10 +1,10 @@
 ---
 name: ralph
-description: Self-improving agent loop that iteratively works toward a goal. Use /ralph start <goal> to begin.
+description: Self-improving goal loop using cron. Use /ralph start <goal> to begin.
 metadata:
   {
     "openclaw": {
-      "keywords": ["loop", "agent", "ralph", "arbos", "iteration", "self-improving"]
+      "keywords": ["loop", "agent", "ralph", "arbos", "iteration", "self-improving", "cron"]
     }
   }
 ---
@@ -12,78 +12,47 @@ metadata:
 # Ralph Loop Skill
 
 ## Overview
-A goal-tracking loop that iteratively works toward an objective with state persistence. Based on the Arbos pattern (MIT licensed), adapted for OpenClaw.
+A goal-tracking loop that runs automatically via cron. Each iteration generates a prompt, waits for work to be recorded, then advances.
 
 ## Concept
 ```
-Goal → Generate Prompt → Work → Record Result → Reflect → Repeat
+Goal + Cron → Run Step → Wait for Work → Record → Next Step → Repeat
 ```
-
-## Files
-
-- `ralph_loop.py` — Main skill logic
-- `PROMPT.md` — Agent system prompt template
-- `memory/` — Working memory (persists between iterations)
 
 ## How It Works
 
-### Setup
-1. User sets a goal with `/ralph start <goal>`
-2. Goal is saved to `memory/GOAL.md`
-3. Each iteration generates a prompt and tracks progress
+1. **Set goal** with `/ralph start <goal>` — creates GOAL.md, STATE.md, sets up cron
+2. **Cron runs** `/ralph run` every minute — generates prompt, increments iteration
+3. **User does work** — based on the prompt
+4. **Record progress** with `/ralph do <result>` or `/ralph continue <result>`
+5. **State updates** — STATE.md tracks progress
+6. **Loop continues** until DONE or max_iterations
 
-### The Loop
-Each iteration:
-1. **Build prompt**: PROMPT.md + GOAL.md + STATE.md + INBOX.md + previous results
-2. **Work**: Operator or subagent works on the goal
-3. **Record**: Use `/ralph do <result>` to record progress
-4. **Reflect**: Update STATE.md with what worked/didn't
-5. **Repeat**: Until goal is achieved or max iterations
+## Key Features
 
-### State Files
-| File | Purpose |
-|------|---------|
-| `memory/GOAL.md` | Objective (set by user) |
-| `memory/STATE.md` | Working memory (persists between steps) |
-| `memory/INBOX.md` | Messages (cleared after each step) |
-| `memory/runs/` | Each iteration's output |
-| `memory/.ralph_settings.json` | Configuration |
+- **Always auto** — cron runs automatically once started
+- **Lock file** — prevents concurrent runs
+- **Max iterations** — default 10, configurable
+- **State persistence** — tracks progress across steps
 
-## Usage
+## Commands
 
 ```
-/ralph start Build a Python script that analyzes stock prices
-
-# Control the loop:
-/ralph run              # Generate next iteration prompt
-/ralph spawn            # Show subagent guidance with full prompt path
-/ralph do <result>      # Record work done
-/ralph continue <result> # Record result AND advance to next step (combined)
-/ralph next             # Advance to next iteration
-/ralph prompt           # Show current prompt
-/ralph status           # Check if running (detailed view)
-/ralph logs [n]         # View recent runs (default 5)
-/ralph state            # Show current state
-/ralph clear            # Clean up old runs
-/ralph stop             # Halt
-/ralph config           # Show settings
-/ralph config-set <key> <value>  # Update setting
-/ralph auto on|off      # Enable/disable auto-run mode (uses cron)
-/ralph usage            # Show token usage stats
-/ralph tune             # Auto-tune recommendations based on usage
-/ralph help             # Show this help
+/ralph start <goal>  - Set goal, initialize state, start cron
+/ralph run           - Generate next iteration prompt (cron calls this)
+/ralph do <result>   - Record work done
+/ralph continue <result> - Record AND advance to next step
+/ralph next          - Advance to next iteration
+/ralph prompt        - Show current prompt
+/ralph status        - Check if running
+/ralph logs [n]      - View recent runs
+/ralph state         - Show current state
+/ralph stop          - Halt and remove cron
+/config              - Show settings
+/config-set <k> <v>  - Update setting
+/ralph help          - Show this help
+/ralph improve       - Self-improvement suggestions
 ```
-
-## Workflow Example
-
-```
-/ralph start Improve the ralph-loop skill
-/ralph run                    # Generates prompt for iteration 1
-/ralph continue Fixed bugs   # Record result AND move to step 2
-/ralph continue More fixes - DONE   # Goal completed
-```
-
-**Streamlined workflow:** Use `/ralph continue <result>` instead of separate do + next commands!
 
 ## Configuration
 
@@ -92,45 +61,45 @@ Edit `memory/.ralph_settings.json`:
 ```json
 {
   "max_iterations": 10,
-  "max_cost": null,
-  "max_tokens_per_run": null,
-  "model": "chutes/MiniMaxAI/MiniMax-M2.5-TEE",
-  "timeout": 600,
-  "max_retries": 3,
-  "auto_mode": false,
-  "auto_delay": 5,
   "auto_frequency": "1m",
-  "learn_from_usage": true,
-  "usage_stats": {}
+  "learn_from_usage": true
 }
 ```
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `max_iterations` | 10 | Stop after N iterations |
-| `max_cost` | null | Stop after $N spent |
-| `max_tokens_per_run` | null | Token budget per run |
-| `model` | MiniMax-M2.5-TEE | Model to use |
-| `timeout` | 600 | Seconds per iteration |
-| `max_retries` | 3 | Retries on failure |
-| `auto_mode` | false | Run automatically via cron |
-| `auto_frequency` | "1m" | Cron frequency (e.g., "1m", "10m", "1h") |
+| `auto_frequency` | "1m" | Cron frequency |
 | `learn_from_usage` | true | Enable usage tracking |
-| `usage_stats` | {} | Token usage history |
 
-## Key Differences from Arbos
+## Workflow Example
 
-| Arbos | Ralph Loop (OpenClaw) |
-|-------|----------------------|
-| Telegram | OpenClaw messages |
-| Claude Code CLI | Built-in prompt generation |
-| `context/` | `memory/` |
-| pm2 process | OpenClaw session |
-| while True loop | Commands + heartbeat |
+```
+/ralph start Build a todo app
+
+# Cron runs /ralph run every minute...
+# You do work based on the prompt...
+
+/ralph continue "Created project structure and basic files"
+/ralph continue "Added database schema and API endpoints"
+/ralph continue "Completed feature - DONE"
+# Loop stops when DONE is in result
+```
+
+## State File
+
+`memory/STATE.md` tracks progress:
+- Initial: "Goal set, ready to begin"
+- After each `/ralph do`: "Step recorded: <summary>"
+- On completion: "Goal marked as complete!"
+
+## Lock File
+
+`.running.lock` prevents concurrent runs. If a run is in progress, next cron tick waits.
 
 ## Success Criteria
 
 Goal is achieved when:
-- Agent signals DONE/COMPLETE in `/ralph do` result
+- DONE or COMPLETE in `/ralph do` or `/ralph continue` result
 - Max iterations reached
 - User sends `/ralph stop`
